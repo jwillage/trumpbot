@@ -27,8 +27,12 @@ archived <- getArchive(2010:2016)
 # tweets from other sources appear to be in the style of trump
 archived <- archived[archived$source != "Twitter for Android", ]
 texts <- archived$text
-tweets <- data.frame(text = texts, line = 1:length(texts), stringsAsFactors = FALSE)
 
+#filter links
+links <- grepl("http[s]*", texts)
+texts[links] <- gsub("http[s]*://.*", "", texts[links])
+
+tweets <- data.frame(text = texts, line = 1:length(texts), stringsAsFactors = FALSE)
 tidy_tweets <- tweets %>% unnest_tokens(word, text)
 #tidy_tweets <- tidy_tweets %>% anti_join(stop_words)
 tidy_tweets %>% count(word, sort=T) %>%
@@ -53,37 +57,84 @@ tweet_sentences <- tweets %>% unnest_tokens(sent, text, token="sentences")
 tweet_sentences$sent <- paste("zzstart", tweet_sentences$sent, "zzend")
 uni_tweets <- tweet_sentences %>% unnest_tokens(word, sent, to_lower = FALSE)
 unigrams <- uni_tweets %>% group_by(word) %>% count(sort=T)
-unigrams$freq <- unigrams$n/nrow(unigrams)
+unigrams$Freq <- unigrams$n/nrow(unigrams)
 
-bi_tweets <- tweet_sentences %>% unnest_tokens(tok, sent, token="ngrams", n=2, to_lower = FALSE)
-bigrams <- bi_tweets %>% group_by(tok) %>% count(sort=T)
-bigrams$freq <- bigrams$n/nrow(bigrams)
-# todo remove garbage ngrams
-# 'amp' == &
+for (i in 1:nrow(tweet_sentences)) {
+  tryCatch(
+    x <- ngrams(tokenize(tweet_sentences$sent[i], concatenator = "_") )
+    ,error = function(e) 
+      print(i)
+  )
+}
+
+problems <- c(7012, 7339, 10810)
+
+tt_bigrams <- buildTidytextModel(tweet_sentences, 2)
+tt_trigrams <- buildTidytextModel(tweet_sentences, 3)
+qt_bigrams <- buildQuantedaModel(tweet_sentences, 2, problems)
+qt_trigrams <- buildQuantedaModel(tweet_sentences, 3, problems)
+
+gen_tweet(tt_bigrams, tt_trigrams)
+gen_tweet(qt_bigrams, qt_trigrams)
 
 
-n = 2
-split <- strsplit(bigrams$tok, " ")
-bigrams$idx <- sapply(split, function(x) paste(x[1:n - 1], collapse = " "))
-bigrams$gram <- sapply(split, function(x) x[n])
+### tidytext's tokenization
+buildTidytextModel <- function(tweet_sentences, n){
+  bi_tweets <- tweet_sentences %>% unnest_tokens(tok, sent, token="ngrams", n=n, to_lower = FALSE)
+  bigrams <- bi_tweets %>% group_by(tok) %>% count(sort=T)
+  bigrams$Freq <- bigrams$n/nrow(bigrams)
+  split <- strsplit(bigrams$tok, " ")
+  bigrams$idx <- sapply(split, function(x) paste(x[1:n - 1], collapse = " "))
+  bigrams$gram <- sapply(split, function(x) x[n])
+  # todo remove garbage ngrams (cont, ...)
+  # 'amp' == &
+  tryCatch({
+    bigrams[bigrams$gram == "amp",]$gram <- "&"
+    bigrams$idx <- gsub("amp", "&", bigrams$idx)
+  })
+  bigrams
+}
 
-gen_tweet()
+# quanteda tokenization
+buildQuantedaModel <- function(tweet_sentences, n, problems){
+  bi_tweets <- ngrams(tokenize(tweet_sentences$sent[-problems], concatenator = "_"), n)
+  bigrams <- data.frame(table(unlist(bi_tweets)), stringsAsFactors = F)
+  bigrams$Var1 <- as.character(bigrams$Var1)
+  split <- strsplit(bigrams$Var1, "_")
+  bigrams$idx <- sapply(split, function(x) paste(x[1:n - 1], collapse = " "))
+  bigrams$gram <- sapply(split, function(x) x[n])  
+  bigrams
+}
 
-gen_tweet <- function() {
+gen_tweet <- function(bigrams, trigrams) {
+  # init with start sentence
   tweet <- list(start="zzstart")
+  l <- tweet[[1]]
+  noise <- rnorm(nrow(bigrams[bigrams$idx==l,]), mean(bigrams[bigrams$idx==l,]$Freq), 10*sd(bigrams[bigrams$idx==l,]$Freq))
+  tweet <- c(tweet,
+             bigrams[bigrams$idx == l, ][which.max(bigrams[bigrams$idx==l,]$Freq + noise), "gram"])
+
   loop = TRUE
   while(loop) {
-    l <- tweet[[length(tweet)]]
+    l <- paste(tweet[[length(tweet)-1]], tweet[[length(tweet)]])
+    if (nrow(trigrams[trigrams$idx==l,]) > 1)
+      noise <- rnorm(nrow(trigrams[trigrams$idx==l,]), mean(trigrams[trigrams$idx==l,]$Freq), 10*sd(trigrams[trigrams$idx==l,]$Freq))
+    else
+      noise <- 0
     tweet <- c(tweet,
-               bigrams[bigrams$idx == l, ]
-               [round(runif(1, 1, nrow(bigrams[bigrams$idx == l, ])), 0), "gram"])    
+               trigrams[trigrams$idx == l, ][which.max(trigrams[trigrams$idx==l,]$Freq + noise), "gram"])
+                # [round(runif(1, 1, nrow(trigrams[trigrams$idx == l, ])), 0), "gram"])    
+    # shouldnt necessarily stop on end of sentence
     if (tweet[[length(tweet)]] == "zzend")
       loop = FALSE
+    loop
     
   }
   tokens <- unlist(tweet)
   paste(tokens[3:length(tokens)-1], collapse=" ")
   
 }
+
+
 
   
