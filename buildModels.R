@@ -1,3 +1,7 @@
+library(quanteda)
+library(tidytext)
+library(dplyr)
+
 tweets <- readRDS("data/trump_tweets.RDS")
 
 # tokenize into sentences
@@ -9,8 +13,9 @@ tweet_sentences$sent <- paste("zzstart", tweet_sentences$sent, "zzend")
 # build tidytext bi/tri-gram models
 tt_tokens_2 <- tokenizeTidytext(tweet_sentences, n=2, lower=FALSE)
 tt_tokens_3 <- tokenizeTidytext(tweet_sentences, n=3, lower=FALSE)
-tt_bigrams <- buildNgramModel(tt_tokens_2, n=2)
-tt_trigrams <- buildNgramModel(tt_tokens_3, n=3)
+tt_bigrams <- buildNgramModel(tt_tokens_2, n=2, " ")
+tt_trigrams <- buildNgramModel(tt_tokens_3, n=3, " ")
+
 # index is always converted to lowercase, while the next gram is left in it's incoming state
 tt_bigrams$idx <- tolower(tt_bigrams$idx)
 tt_trigrams$idx <- tolower(tt_trigrams$idx)
@@ -28,21 +33,23 @@ problems <- c(7012, 7339, 10810)
 # build quanteda-tokenized models
 qt_tokens_2 <- tokenizeQuanteda(tweet_sentences, n=2, remove=problems)
 qt_tokens_3 <- tokenizeQuanteda(tweet_sentences, n=3, remove=problems)
-qt_bigrams <- buildNgramModel(qt_tokens_2, n=2)
-qt_trigrams <- buildNgramModel(qt_tokens_3, n=3)
+qt_bigrams <- buildNgramModel(qt_tokens_2, n=2, "_")
+qt_trigrams <- buildNgramModel(qt_tokens_3, n=3, "_")
 
 
 
 
 # add some regular text to give a give model more variety and sentence/grammatical structure
-supp <- readLines("data/en_US.twitter.txt")
+supp <- readLines("data/en_US.blogs.txt")
 supp_df <- data.frame(supp, stringsAsFactors = F)
 supp_sentences <- supp_df %>% unnest_tokens(sent, supp, token="sentences")
 supp_sentences$sent <- paste("zzstart", supp_sentences$sent, "zzend")
 
-# build the models but weight them lower than trumps own tweets
-tt_supp_bigrams <- buildTidytextModel(supp_sentences, 2)
-tt_supp_trigrams <- buildTidytextModel(supp_sentences, 3)
+supp_tokens_2 <- tokenizeTidytext(supp_sentences$sent, n=2, lower=FALSE)
+supp_tokens_3 <- tokenizeTidytext(supp_sentences$sent, n=3, lower=FALSE)
+tt_supp_bigrams <- buildNgramModel(supp_tokens_2, n=2)
+tt_supp_trigrams <- buildNgramModel(supp_tokens_3, n=3)
+
 # todo weight down the n instead of freq, since freq will be recalculatd after models are bound
 tt_supp_bigrams$Freq <- tt_supp_bigrams$Freq * 0.15
 tt_supp_trigrams$Freq <- tt_supp_trigrams$Freq * 0.15
@@ -63,31 +70,35 @@ gen_tweet(tt_bi_all, tt_tri_all)
 tokenizeTidytext <- function(tweet_sentences, n, lower){
   grams <- tweet_sentences %>% 
     unnest_tokens(tok, sent, token="ngrams", n=n, to_lower = lower) %>%
-    bi_tweets %>% 
     group_by(tok) %>% 
     count(sort=T)
   
-  grams$Freq <- grams$n/nrow(grams)
+ # grams$Freq <- grams$n/nrow(grams)
+  grams$Freq <- grams$n/sum(grams$n)
   grams
 }
 
 # quanteda tokenization
 tokenizeQuanteda <- function(tweet_sentences, n, remove){
-  tweets <- ngrams(tokenize(tweet_sentences$sent[-remove], concatenator = " "), n)
+  tweets <- ngrams(tokenize(tweet_sentences$sent[-remove], concatenator = "_"), n)
   grams <- data.frame(table(unlist(tweets)), stringsAsFactors = F)
   grams$tok <- as.character(grams$Var1)
+  grams$n <- grams$Freq
+  #grams$Freq <- grams$n/nrow(grams)
+  grams$Freq <- grams$n/sum(grams$n)
+  grams
 }
 
-buildNgramModel <- function(tokens, n) {
-  split <- strsplit(tokens$tok, " ")
+buildNgramModel <- function(model, n, concat) {
+  split <- strsplit(model$tok, concat)
   model$idx <- sapply(split, function(x) paste(x[1:n - 1], collapse = " "))
   model$gram <- sapply(split, function(x) x[n])
   # todo remove garbage ngrams (cont, ...)
   # 'amp' == &, todo this should be done early on 
-  tryCatch({
-    model[model$gram == "amp",]$gram <- "&"
-    model$idx <- gsub("amp", "&", model$idx)
-  })
+  # tryCatch({
+  #   model[model$gram == "amp",]$gram <- "&"
+  #   model$idx <- gsub("amp", "&", model$idx)
+  # })
   model
 }
 
